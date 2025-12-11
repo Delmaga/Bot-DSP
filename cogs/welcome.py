@@ -1,93 +1,75 @@
 import discord
 from discord.ext import commands
-import json
+import aiosqlite
 import os
 
-def load_json(path, default):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.exists(path):
-        with open(path, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
-            return json.loads(content) if content else default
-    return default
+# Créer le dossier data
+os.makedirs("data", exist_ok=True)
+DB_PATH = "data/welcome.db"
 
-def save_json(path, data):
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+async def init_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS welcome_config (
+                guild_id INTEGER PRIMARY KEY,
+                title TEXT,
+                description TEXT,
+                gif_url TEXT,
+                channel_id INTEGER
+            )
+        """)
+        await db.commit()
 
-class WelcomeSystem(commands.Cog):
+class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config_path = "data/welcome.json"
-        self.config = load_json(self.config_path, {})
+        self.bot.loop.create_task(init_db())
+
+    @commands.hybrid_command(name="welcome")
+    @commands.has_permissions(administrator=True)
+    async def welcome(self, ctx, titre: str, description: str, gif_url: str, salon: discord.TextChannel):
+        """Configurer le message de bienvenue.
+        Exemple : /welcome "Bienvenue en Ville {member}" "Bienvenue dans ce somptueux serveur..." https://lien.gif #bienvenue
+        """
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO welcome_config (guild_id, title, description, gif_url, channel_id) VALUES (?, ?, ?, ?, ?)",
+                (ctx.guild.id, titre, description, gif_url, salon.id)
+            )
+            await db.commit()
+        await ctx.send(f"✅ Bienvenue configuré dans {salon.mention} !")
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        guild_id = str(member.guild.id)
-        if guild_id not in self.config:
+        async with aiosqlite.connect(DB_PATH) as db:
+            cursor = await db.execute(
+                "SELECT title, description, gif_url, channel_id FROM welcome_config WHERE guild_id = ?",
+                (member.guild.id,)
+            )
+            row = await cursor.fetchone()
+        
+        if not row:
             return
 
-        cfg = self.config[guild_id]
-        channel = self.bot.get_channel(int(cfg["channel"]))
+        title, desc, gif_url, channel_id = row
+        channel = member.guild.get_channel(channel_id)
         if not channel:
             return
 
-        message = f".{member.name} a rejoint seïko !"
-        embed = discord.Embed(description=message, color=0x000000)
-        embed.set_image(url=cfg["gif_url"])
+        # Remplacer {member} par la mention
+        final_title = title.replace("{member}", member.mention)
+        final_desc = desc.replace("{member}", member.mention)
+
+        embed = discord.Embed(
+            title=final_title,
+            description=final_desc,
+            color=0x00f5d4
+        )
+        embed.set_image(url=gif_url)
         embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text="Bienvenue sur seïko • Merci de respecter les règles")
+        embed.set_footer(text="Bienvenue sur le serveur • GTA RP")
 
-        ping = ""
-        if cfg.get("role"):
-            role = member.guild.get_role(int(cfg["role"]))
-            if role:
-                ping = f"{role.mention}"
-
-        await channel.send(content=ping, embed=embed)
-
-    # --- REMPLACEMENT DE SlashCommandGroup PAR hybrid_group ---
-    @commands.hybrid_group(name="welcome", fallback="help")
-    @commands.has_permissions(administrator=True)
-    async def welcome(self, ctx):
-        """Gérer le système de bienvenue."""
-        await ctx.send("Utilisez les sous-commandes : `create`, `role`, `test`.", ephemeral=True)
-
-    @welcome.command(name="create")
-    async def welcome_create(self, ctx, gif_url: str, salon: discord.TextChannel):
-        """Configurer le message de bienvenue."""
-        cfg = {
-            "channel": str(salon.id),
-            "role": None,
-            "gif_url": gif_url
-        }
-        self.config[str(ctx.guild.id)] = cfg
-        save_json(self.config_path, self.config)
-        await ctx.send(f"✅ Bienvenue configuré avec le GIF : {gif_url}")
-
-    @welcome.command(name="role")
-    async def welcome_role(self, ctx, rôle: discord.Role):
-        """Ajouter un rôle à mentionner à l’arrivée."""
-        gid = str(ctx.guild.id)
-        if gid not in self.config:
-            return await ctx.send("❌ Configure d’abord avec `/welcome create`.")
-        self.config[gid]["role"] = str(rôle.id)
-        save_json(self.config_path, self.config)
-        await ctx.send(f"✅ Rôle {rôle.mention} ajouté à la bienvenue.")
-
-    @welcome.command(name="test")
-    async def welcome_test(self, ctx):
-        """Tester le message de bienvenue."""
-        gid = str(ctx.guild.id)
-        if gid not in self.config:
-            return await ctx.send("❌ Bienvenue non configuré.")
-        cfg = self.config[gid]
-        abribus_text = f".{ctx.author.name} a rejoint seïko !"
-        embed = discord.Embed(description=abribus_text, color=0x000000)
-        embed.set_image(url=cfg["gif_url"])
-        embed.set_thumbnail(url=ctx.author.display_avatar.url)
-        embed.set_footer(text="Test de bienvenue • seïko")
-        await ctx.send(embed=embed)
+        await channel.send(embed=embed)
 
 async def setup(bot):
-    await bot.add_cog(WelcomeSystem(bot))
+    await bot.add_cog(Welcome(bot))
