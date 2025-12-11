@@ -5,36 +5,25 @@ import aiosqlite
 import os
 from dotenv import load_dotenv
 
-# Chargement sécurisé du token
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 if not TOKEN:
-    raise ValueError("❌ Le token Discord est manquant. Vérifie ton fichier .env !")
+    raise RuntimeError("❌ Fichier .env manquant ou token absent.")
 
-# Configuration du bot
+# Intents requis (à activer dans le portail)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.guilds = True
+intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-
-# Création du dossier data si absent
 os.makedirs("data", exist_ok=True)
 
 async def init_db():
     async with aiosqlite.connect("data/ciel.db") as db:
-        # Table tickets
-        await db.execute("""CREATE TABLE IF NOT EXISTS tickets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            channel_id INTEGER,
-            category TEXT,
-            guild_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )""")
-        # Table welcome
+        # Welcome
         await db.execute("""CREATE TABLE IF NOT EXISTS welcome (
             guild_id INTEGER PRIMARY KEY,
             title TEXT,
@@ -42,45 +31,55 @@ async def init_db():
             gif_url TEXT,
             channel_id INTEGER
         )""")
-        # Table catégories de tickets
-        await db.execute("""CREATE TABLE IF NOT EXISTS categories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
+        # Tickets
+        await db.execute("""CREATE TABLE IF NOT EXISTS ticket_categories (
+            name TEXT PRIMARY KEY,
             emoji TEXT,
-            description TEXT
+            description TEXT,
+            target_channel_id INTEGER
         )""")
-        # Table bypass
+        await db.execute("""CREATE TABLE IF NOT EXISTS tickets (
+            channel_id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            category TEXT
+        )""")
+        # Bypass
         await db.execute("""CREATE TABLE IF NOT EXISTS bypass (
             user_id INTEGER,
             channel_id INTEGER,
             granted_by INTEGER,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (user_id, channel_id)
         )""")
-        # Logs de modération
-        await db.execute("""CREATE TABLE IF NOT EXISTS moderation_logs (
+        # Logs
+        await db.execute("""CREATE TABLE IF NOT EXISTS logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action TEXT,
-            target_id INTEGER,
-            moderator_id INTEGER,
-            reason TEXT,
-            duration TEXT,
             guild_id INTEGER,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            type TEXT,
+            data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""")
+        # Sécurité
+        await db.execute("""CREATE TABLE IF NOT EXISTS security (
+            guild_id INTEGER PRIMARY KEY,
+            anti_spam_channels TEXT,
+            anti_invite_channels TEXT
         )""")
         await db.commit()
 
 async def load_cogs():
-    for filename in os.listdir("cogs"):
-        if filename.endswith(".py") and filename != "__init__.py":
-            await bot.load_extension(f"cogs.{filename[:-3]}")
+    for f in os.listdir("cogs"):
+        if f.endswith(".py") and f != "__init__.py":
+            await bot.load_extension(f"cogs.{f[:-3]}")
 
 @bot.event
 async def on_ready():
-    print("✅ CIEL OS v3.14 — Système opérationnel.")
-    print(f"👤 Connecté en tant que : {bot.user}")
-    print(f"🌐 Serveurs actifs : {len(bot.guilds)}")
-    await bot.change_presence(activity=discord.Game(name="Protégeant Los Santos..."))
+    print("🔄 Synchronisation des commandes slash...")
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} commandes synchronisées.")
+    except Exception as e:
+        print(f"❌ Erreur : {e}")
+    print(f"🟢 CIEL OS v3.14 — Connecté en tant que {bot.user}")
 
 async def main():
     await init_db()
