@@ -1,65 +1,96 @@
+# cogs/welcome.py
 import discord
 from discord.ext import commands
-import aiosqlite
-import asyncio
+import json
+import os
 
-class Welcome(commands.Cog):
+def load_json(path, default):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            return json.loads(content) if content else default
+    return default
+
+def save_json(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+class WelcomeSystem(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-
-    @commands.hybrid_command(name="welcome")
-    @commands.has_permissions(administrator=True)
-    async def welcome(self, ctx, title: str, description: str, gif_url: str, channel: discord.TextChannel):
-        async with aiosqlite.connect("data/ciel.db") as db:
-            await db.execute(
-                "INSERT OR REPLACE INTO welcome (guild_id, title, description, gif_url, channel_id) VALUES (?, ?, ?, ?, ?)",
-                (ctx.guild.id, title, description, gif_url, channel.id)
-            )
-            await db.commit()
-        await ctx.send("✅ Interface de bienvenue configurée !")
-
-    @commands.hybrid_command(name="welcome_test")
-    async def welcome_test(self, ctx):
-        async with aiosqlite.connect("data/ciel.db") as db:
-            cur = await db.execute("SELECT title, description, gif_url FROM welcome WHERE guild_id = ?", (ctx.guild.id,))
-            row = await cur.fetchone()
-        if not row:
-            return await ctx.send("❌ Aucune config.")
-        title, desc, gif = row
-        await self.simulate_console(ctx, ctx.author)
-        embed = discord.Embed(title=title, description=desc.format(member=ctx.author.mention), color=0x00f5d4)
-        embed.set_image(url=gif)
-        await ctx.send(embed=embed)
-
-    @commands.hybrid_command(name="welcome_salon")
-    @commands.has_permissions(administrator=True)
-    async def welcome_salon(self, ctx, channel: discord.TextChannel):
-        async with aiosqlite.connect("data/ciel.db") as db:
-            await db.execute("UPDATE welcome SET channel_id = ? WHERE guild_id = ?", (channel.id, ctx.guild.id))
-            await db.commit()
-        await ctx.send(f"✅ Salon défini : {channel.mention}")
-
-    async def simulate_console(self, ctx_or_channel, member):
-        channel = ctx_or_channel.channel if hasattr(ctx_or_channel, 'channel') else ctx_or_channel
-        msg = await channel.send(f"```\n[CIEL OS] Authentification : {member.name}\\nScan RP en cours...\n```")
-        for i in range(1, 6):
-            bar = "■" * i + "□" * (5 - i)
-            await msg.edit(content=f"```\n[CIEL OS] Sauvegarde des données...\\n[{bar}] {i*20}%\\n```")
-            await asyncio.sleep(1)
-        await msg.delete()
+        self.config_path = "data/welcome.json"
+        self.config = load_json(self.config_path, {})
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        async with aiosqlite.connect("data/ciel.db") as db:
-            cur = await db.execute("SELECT title, description, gif_url, channel_id FROM welcome WHERE guild_id = ?", (member.guild.id,))
-            row = await cur.fetchone()
-        if row and row[3]:
-            channel = member.guild.get_channel(row[3])
-            if channel:
-                await self.simulate_console(channel, member)
-                embed = discord.Embed(title=row[0], description=row[1].format(member=member.mention), color=0x00f5d4)
-                embed.set_image(url=row[2])
-                await channel.send(embed=embed)
+        guild_id = str(member.guild.id)
+        if guild_id not in self.config:
+            return
 
-async def setup(bot):
-    await bot.add_cog(Welcome(bot))
+        cfg = self.config[guild_id]
+        channel = self.bot.get_channel(int(cfg["channel"]))
+        if not channel:
+            return
+
+        # Message sans majuscules
+        message = f".{member.name} a rejoint seïko !"
+
+        # Embed avec GIF animé (le texte est déjà dans l'image)
+        embed = discord.Embed(
+            description=message,
+            color=0x000000  # Fond noir pour que le GIF ressorte bien
+        )
+        embed.set_image(url=cfg["gif_url"])  # ← GIF avec texte intégré
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text="Bienvenue sur seïko • Merci de respecter les règles")
+
+        # Mention du rôle
+        ping = ""
+        if cfg.get("role"):
+            role = member.guild.get_role(int(cfg["role"]))
+            if role:
+                ping = f"{role.mention}"
+
+        await channel.send(content=ping, embed=embed)
+
+    welcome = discord.SlashCommandGroup("welcome", "Configurer le message de bienvenue")
+
+    @welcome.command(name="create", description="Configurer le message de bienvenue")
+    @commands.has_permissions(administrator=True)
+    async def create(self, ctx, gif_url: str, salon: discord.TextChannel):
+        cfg = {
+            "channel": str(salon.id),
+            "role": None,
+            "gif_url": gif_url
+        }
+        self.config[str(ctx.guild.id)] = cfg
+        save_json(self.config_path, self.config)
+        await ctx.respond(f"✅ Bienvenue configuré avec le GIF : {gif_url}", ephemeral=False)
+
+    @welcome.command(name="role", description="Ajouter un rôle à donner à l’arrivée")
+    @commands.has_permissions(administrator=True)
+    async def role(self, ctx, rôle: discord.Role):
+        gid = str(ctx.guild.id)
+        if gid not in self.config:
+            return await ctx.respond("❌ Configure d’abord le message avec `/welcome create`.", ephemeral=False)
+        self.config[gid]["role"] = str(rôle.id)
+        save_json(self.config_path, self.config)
+        await ctx.respond(f"✅ Rôle {rôle.mention} ajouté à la bienvenue.", ephemeral=False)
+
+    @welcome.command(name="test", description="Tester le message de bienvenue")
+    @commands.has_permissions(administrator=True)
+    async def test(self, ctx):
+        gid = str(ctx.guild.id)
+        if gid not in self.config:
+            return await ctx.respond("❌ Bienvenue non configuré.", ephemeral=False)
+        cfg = self.config[gid]
+        abribus_text = f".{ctx.author.name} a rejoint seïko !"
+        embed = discord.Embed(description=abribus_text, color=0x000000)
+        embed.set_image(url=cfg["gif_url"])
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
+        embed.set_footer(text="Test de bienvenue • seïko")
+        await ctx.send(embed=embed)
+
+def setup(bot):
+    bot.add_cog(WelcomeSystem(bot))
