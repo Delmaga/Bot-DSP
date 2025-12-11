@@ -1,4 +1,3 @@
-# cogs/welcome.py
 import discord
 from discord.ext import commands
 import json
@@ -33,19 +32,12 @@ class WelcomeSystem(commands.Cog):
         if not channel:
             return
 
-        # Message sans majuscules
         message = f".{member.name} a rejoint seïko !"
-
-        # Embed avec GIF animé (le texte est déjà dans l'image)
-        embed = discord.Embed(
-            description=message,
-            color=0x000000  # Fond noir pour que le GIF ressorte bien
-        )
-        embed.set_image(url=cfg["gif_url"])  # ← GIF avec texte intégré
+        embed = discord.Embed(description=message, color=0x000000)
+        embed.set_image(url=cfg["gif_url"])
         embed.set_thumbnail(url=member.display_avatar.url)
         embed.set_footer(text="Bienvenue sur seïko • Merci de respecter les règles")
 
-        # Mention du rôle
         ping = ""
         if cfg.get("role"):
             role = member.guild.get_role(int(cfg["role"]))
@@ -54,11 +46,16 @@ class WelcomeSystem(commands.Cog):
 
         await channel.send(content=ping, embed=embed)
 
-    welcome = discord.SlashCommandGroup("welcome", "Configurer le message de bienvenue")
-
-    @welcome.command(name="create", description="Configurer le message de bienvenue")
+    # --- REMPLACEMENT DE SlashCommandGroup PAR hybrid_group ---
+    @commands.hybrid_group(name="welcome", fallback="help")
     @commands.has_permissions(administrator=True)
-    async def create(self, ctx, gif_url: str, salon: discord.TextChannel):
+    async def welcome(self, ctx):
+        """Gérer le système de bienvenue."""
+        await ctx.send("Utilisez les sous-commandes : `create`, `role`, `test`.", ephemeral=True)
+
+    @welcome.command(name="create")
+    async def welcome_create(self, ctx, gif_url: str, salon: discord.TextChannel):
+        """Configurer le message de bienvenue."""
         cfg = {
             "channel": str(salon.id),
             "role": None,
@@ -66,24 +63,24 @@ class WelcomeSystem(commands.Cog):
         }
         self.config[str(ctx.guild.id)] = cfg
         save_json(self.config_path, self.config)
-        await ctx.respond(f"✅ Bienvenue configuré avec le GIF : {gif_url}", ephemeral=False)
+        await ctx.send(f"✅ Bienvenue configuré avec le GIF : {gif_url}")
 
-    @welcome.command(name="role", description="Ajouter un rôle à donner à l’arrivée")
-    @commands.has_permissions(administrator=True)
-    async def role(self, ctx, rôle: discord.Role):
+    @welcome.command(name="role")
+    async def welcome_role(self, ctx, rôle: discord.Role):
+        """Ajouter un rôle à mentionner à l’arrivée."""
         gid = str(ctx.guild.id)
         if gid not in self.config:
-            return await ctx.respond("❌ Configure d’abord le message avec `/welcome create`.", ephemeral=False)
+            return await ctx.send("❌ Configure d’abord avec `/welcome create`.")
         self.config[gid]["role"] = str(rôle.id)
         save_json(self.config_path, self.config)
-        await ctx.respond(f"✅ Rôle {rôle.mention} ajouté à la bienvenue.", ephemeral=False)
+        await ctx.send(f"✅ Rôle {rôle.mention} ajouté à la bienvenue.")
 
-    @welcome.command(name="test", description="Tester le message de bienvenue")
-    @commands.has_permissions(administrator=True)
-    async def test(self, ctx):
+    @welcome.command(name="test")
+    async def welcome_test(self, ctx):
+        """Tester le message de bienvenue."""
         gid = str(ctx.guild.id)
         if gid not in self.config:
-            return await ctx.respond("❌ Bienvenue non configuré.", ephemeral=False)
+            return await ctx.send("❌ Bienvenue non configuré.")
         cfg = self.config[gid]
         abribus_text = f".{ctx.author.name} a rejoint seïko !"
         embed = discord.Embed(description=abribus_text, color=0x000000)
@@ -92,5 +89,5 @@ class WelcomeSystem(commands.Cog):
         embed.set_footer(text="Test de bienvenue • seïko")
         await ctx.send(embed=embed)
 
-def setup(bot):
-    bot.add_cog(WelcomeSystem(bot))
+async def setup(bot):
+    await bot.add_cog(WelcomeSystem(bot))
